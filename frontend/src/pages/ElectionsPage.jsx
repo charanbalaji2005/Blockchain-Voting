@@ -1,9 +1,11 @@
 import { useEffect, useState } from 'react';
-import { Link } from 'react-router-dom';
+import { Link, useNavigate } from 'react-router-dom';
 import { motion } from 'framer-motion';
-import { Search, Vote, Clock, Users, ArrowRight, Filter } from 'lucide-react';
+import { Search, Vote, Clock, Users, ArrowRight, Filter, LogOut, User } from 'lucide-react';
 import api from '../utils/api';
 import { format, formatDistanceToNow } from 'date-fns';
+import useAuthStore from '../store/authStore';
+import WalletButton from '../components/WalletButton';
 
 const STATUS_FILTERS = ['all', 'active', 'upcoming', 'ended', 'results_published'];
 
@@ -93,6 +95,13 @@ export default function ElectionsPage() {
   const [loading, setLoading] = useState(true);
   const [search, setSearch] = useState('');
   const [filter, setFilter] = useState('all');
+  const { isAuthenticated, user, logout } = useAuthStore();
+  const navigate = useNavigate();
+
+  const handleLogout = () => {
+    logout();
+    navigate('/');
+  };
 
   useEffect(() => {
     setLoading(true);
@@ -109,12 +118,35 @@ export default function ElectionsPage() {
 
   return (
     <div className="min-h-screen bg-void">
-      {/* Simple header for non-authed users */}
-      <div className="bg-ink/80 border-b border-border">
+      {/* Header */}
+      <div className="bg-ink/80 backdrop-blur-xl border-b border-border sticky top-0 z-20">
         <div className="max-w-5xl mx-auto px-6 h-16 flex items-center justify-between">
           <Link to="/" className="font-display font-bold text-white">VoteChain</Link>
           <div className="flex items-center gap-3">
-            <Link to="/login" className="btn-ghost text-sm px-4 py-2">Sign In</Link>
+            {isAuthenticated ? (
+              <>
+                <WalletButton />
+                <Link
+                  to="/dashboard"
+                  className="hidden sm:flex items-center gap-2 px-3 py-2 rounded-lg text-sm text-muted hover:text-white hover:bg-surface transition-all"
+                >
+                  <User className="w-4 h-4" />
+                  {user?.username}
+                </Link>
+                <button
+                  onClick={handleLogout}
+                  className="flex items-center gap-2 px-3 py-2 rounded-lg text-sm text-muted hover:text-danger hover:bg-danger/10 transition-all"
+                >
+                  <LogOut className="w-4 h-4" />
+                  <span className="hidden sm:inline">Sign Out</span>
+                </button>
+              </>
+            ) : (
+              <>
+                <Link to="/login" className="btn-ghost text-sm px-4 py-2">Sign In</Link>
+                <Link to="/register" className="btn-primary text-sm px-4 py-2">Sign Up</Link>
+              </>
+            )}
           </div>
         </div>
       </div>

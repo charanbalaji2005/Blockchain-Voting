@@ -10,10 +10,10 @@ const useAuthStore = create(
       isAuthenticated: false,
       isLoading: false,
 
-      login: async (username, password) => {
+      login: async (email, password) => {
         set({ isLoading: true });
         try {
-          const { data } = await api.post('/auth/login/', { username, password });
+          const { data } = await api.post('/auth/login/', { email, password });
           set({
             tokens: { access: data.access, refresh: data.refresh },
             isAuthenticated: true,

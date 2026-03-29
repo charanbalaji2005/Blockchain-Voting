@@ -7,12 +7,13 @@ from django.contrib.auth import get_user_model
 from django.utils import timezone
 from django.core.cache import cache
 from django.core.mail import send_mail
-from rest_framework import viewsets, status, generics
+from rest_framework import viewsets, status, generics, serializers
 from rest_framework.decorators import action, api_view, permission_classes, parser_classes
 from rest_framework.parsers import MultiPartParser
 from rest_framework.permissions import IsAuthenticated, IsAdminUser, AllowAny
 from rest_framework.response import Response
 from rest_framework_simplejwt.views import TokenObtainPairView
+from rest_framework_simplejwt.serializers import TokenObtainPairSerializer
 from web3 import Web3
 
 from .models import Election, Candidate, VoterRegistration, Vote, AuditLog
@@ -23,6 +24,34 @@ from .serializers import (
 )
 
 User = get_user_model()
+
+# Custom JWT Serializer to accept email
+class EmailTokenObtainPairSerializer(TokenObtainPairSerializer):
+    username_field = 'email'
+    
+    def validate(self, attrs):
+        # Get email and password from request
+        email = attrs.get('email')
+        password = attrs.get('password')
+        
+        # Find user by email and add username to attrs
+        try:
+            user = User.objects.get(email=email)
+            # Keep email but also add username for authentication
+            attrs['username'] = user.username
+        except User.DoesNotExist:
+            pass  # Let parent class handle the error
+        
+        # Temporarily change username_field to 'username' for parent validation
+        original_field = self.username_field
+        self.username_field = 'username'
+        result = super().validate(attrs)
+        self.username_field = original_field
+        
+        return result
+
+class EmailTokenObtainPairView(TokenObtainPairView):
+    serializer_class = EmailTokenObtainPairSerializer
 
 # Web3 Setup
 def get_web3():
@@ -239,22 +268,58 @@ class ElectionViewSet(viewsets.ModelViewSet):
                 'gasPrice': w3.eth.gas_price,
             })
             signed = w3.eth.account.sign_transaction(tx, settings.ADMIN_PRIVATE_KEY)
-            tx_hash = w3.eth.send_raw_transaction(signed.rawTransaction)
+            tx_hash = w3.eth.send_raw_transaction(signed.raw_transaction)
             receipt = w3.eth.wait_for_transaction_receipt(tx_hash)
-            logs = contract.events.ElectionCreated().process_receipt(receipt)
-            blockchain_id = logs[0]['args']['electionId']
+            
+            # Get the election ID from the contract
+            election_count = contract.functions.electionCount().call()
+            blockchain_id = election_count  # The newly created election ID
+            
             election.blockchain_election_id = blockchain_id
-            election.status = 'upcoming'
+            election.status = 'active'  # Set to active so voting can begin
             election.save()
+            
+            # Publish all existing candidates to blockchain
+            candidates_published = 0
+            for candidate in election.candidates.all():
+                if not candidate.blockchain_candidate_id:
+                    try:
+                        nonce = w3.eth.get_transaction_count(account.address)
+                        tx = contract.functions.addCandidate(
+                            blockchain_id,
+                            candidate.name,
+                            candidate.party,
+                            candidate.photo_ipfs_hash or ''
+                        ).build_transaction({
+                            'from': account.address,
+                            'nonce': nonce,
+                            'gas': 200000,
+                            'gasPrice': w3.eth.gas_price,
+                        })
+                        signed = w3.eth.account.sign_transaction(tx, settings.ADMIN_PRIVATE_KEY)
+                        tx_hash = w3.eth.send_raw_transaction(signed.raw_transaction)
+                        receipt = w3.eth.wait_for_transaction_receipt(tx_hash)
+                        
+                        # Get candidate ID from contract
+                        candidate_count = contract.functions.candidateCount(blockchain_id).call()
+                        candidate.blockchain_candidate_id = candidate_count
+                        candidate.save()
+                        candidates_published += 1
+                    except Exception as e:
+                        print(f"Error publishing candidate {candidate.name}: {e}")
+            
             log_action(request.user, 'election_create',
-                      {'election_id': election.id, 'blockchain_id': blockchain_id},
+                      {'election_id': election.id, 'blockchain_id': blockchain_id, 'candidates': candidates_published},
                       request, tx_hash.hex())
             return Response({
                 'blockchain_election_id': blockchain_id,
                 'tx_hash': tx_hash.hex(),
-                'status': 'deployed'
+                'status': 'deployed',
+                'candidates_published': candidates_published
             })
         except Exception as e:
+            import traceback
+            traceback.print_exc()
             return Response({'error': str(e)}, status=500)
 
     @action(detail=True, methods=['post'], permission_classes=[IsAdminUser])
@@ -276,7 +341,7 @@ class ElectionViewSet(viewsets.ModelViewSet):
                 'gasPrice': w3.eth.gas_price,
             })
             signed = w3.eth.account.sign_transaction(tx, settings.ADMIN_PRIVATE_KEY)
-            tx_hash = w3.eth.send_raw_transaction(signed.rawTransaction)
+            tx_hash = w3.eth.send_raw_transaction(signed.raw_transaction)
             w3.eth.wait_for_transaction_receipt(tx_hash)
             election.status = 'ended'
             election.save()
@@ -319,7 +384,7 @@ class CandidateViewSet(viewsets.ModelViewSet):
                         'gasPrice': w3.eth.gas_price,
                     })
                     signed = w3.eth.account.sign_transaction(tx, settings.ADMIN_PRIVATE_KEY)
-                    tx_hash = w3.eth.send_raw_transaction(signed.rawTransaction)
+                    tx_hash = w3.eth.send_raw_transaction(signed.raw_transaction)
                     receipt = w3.eth.wait_for_transaction_receipt(tx_hash)
                     logs = contract.events.CandidateAdded().process_receipt(receipt)
                     candidate.blockchain_candidate_id = logs[0]['args']['candidateId']
@@ -340,7 +405,8 @@ class VoterRegistrationViewSet(viewsets.ViewSet):
             return Response({'error': 'Election not found'}, status=404)
         if VoterRegistration.objects.filter(user=request.user, election=election).exists():
             return Response({'error': 'Already registered for this election'}, status=400)
-        if not request.user.is_verified:
+        # Skip verification check for admin users
+        if not request.user.is_verified and not (request.user.is_staff or request.user.is_superuser):
             return Response({'error': 'Identity verification required before registering to vote'}, status=403)
         reg = VoterRegistration.objects.create(
             user=request.user,
@@ -385,7 +451,7 @@ class VoterRegistrationViewSet(viewsets.ViewSet):
                 'gasPrice': w3.eth.gas_price,
             })
             signed = w3.eth.account.sign_transaction(tx, settings.ADMIN_PRIVATE_KEY)
-            tx_hash = w3.eth.send_raw_transaction(signed.rawTransaction)
+            tx_hash = w3.eth.send_raw_transaction(signed.raw_transaction)
             w3.eth.wait_for_transaction_receipt(tx_hash)
             reg.status = 'blockchain_registered'
             reg.blockchain_tx_hash = tx_hash.hex()

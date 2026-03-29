@@ -1,15 +1,15 @@
-FROM python:3.12-slim
+FROM node:20-alpine AS builder
 
 WORKDIR /app
 
-# System deps
-RUN apt-get update && apt-get install -y \
-    libpq-dev gcc \
-    && rm -rf /var/lib/apt/lists/*
-
-COPY requirements.txt .
-RUN pip install --no-cache-dir -r requirements.txt
+COPY package*.json ./
+RUN npm ci
 
 COPY . .
+RUN npm run build
 
-EXPOSE 8000
+FROM nginx:alpine
+COPY --from=builder /app/dist /usr/share/nginx/html
+COPY nginx.conf /etc/nginx/conf.d/default.conf
+
+EXPOSE 80

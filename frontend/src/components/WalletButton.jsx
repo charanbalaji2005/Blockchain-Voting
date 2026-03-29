@@ -1,111 +1,134 @@
-import { useState } from 'react';
-import { motion, AnimatePresence } from 'framer-motion';
-import { Wallet, Check, AlertTriangle, ExternalLink, Copy } from 'lucide-react';
-import { useWeb3 } from '../utils/useWeb3';
+import { ConnectButton } from '@rainbow-me/rainbowkit';
+import { useAccount } from 'wagmi';
+import { useEffect } from 'react';
 import useAuthStore from '../store/authStore';
 import api from '../utils/api';
 import toast from 'react-hot-toast';
 
-function shortenAddress(addr) {
-  return addr ? `${addr.slice(0, 6)}...${addr.slice(-4)}` : '';
-}
-
 export default function WalletButton() {
-  const { account, connect, isConnecting, isCorrectNetwork, switchToSepolia, chainId } = useWeb3();
+  const { address, isConnected } = useAccount();
   const { user, fetchProfile } = useAuthStore();
-  const [showMenu, setShowMenu] = useState(false);
 
-  const handleConnect = async () => {
-    const addr = await connect();
-    if (addr && user) {
-      try {
-        await api.patch('/auth/me/', { wallet_address: addr });
-        fetchProfile();
-        toast.success('Wallet linked to your account!');
-      } catch (_) {}
-    }
-  };
+  useEffect(() => {
+    const updateWalletAddress = async () => {
+      if (isConnected && address && user && user.wallet_address !== address) {
+        try {
+          await api.patch('/auth/me/', { wallet_address: address });
+          fetchProfile();
+          toast.success('Wallet linked to your account!');
+        } catch (error) {
+          console.error('Failed to update wallet address:', error);
+        }
+      }
+    };
 
-  const copyAddress = () => {
-    navigator.clipboard.writeText(account);
-    toast.success('Address copied!');
-  };
-
-  if (!account) {
-    return (
-      <button
-        onClick={handleConnect}
-        disabled={isConnecting}
-        className="flex items-center gap-2 px-4 py-2 rounded-xl bg-accent/15 text-accent border border-accent/30 
-                   text-sm font-display font-semibold transition-all hover:bg-accent/25 disabled:opacity-50"
-      >
-        <Wallet className="w-4 h-4" />
-        {isConnecting ? 'Connecting...' : 'Connect Wallet'}
-      </button>
-    );
-  }
+    updateWalletAddress();
+  }, [isConnected, address, user, fetchProfile]);
 
   return (
-    <div className="relative">
-      <button
-        onClick={() => setShowMenu(!showMenu)}
-        className={`flex items-center gap-2 px-3 py-2 rounded-xl border text-sm font-mono font-medium transition-all
-          ${isCorrectNetwork
-            ? 'bg-success/10 text-success border-success/30 hover:bg-success/20'
-            : 'bg-warning/10 text-warning border-warning/30 hover:bg-warning/20'
-          }`}
-      >
-        {isCorrectNetwork ? <Check className="w-3.5 h-3.5" /> : <AlertTriangle className="w-3.5 h-3.5" />}
-        {shortenAddress(account)}
-      </button>
+    <ConnectButton.Custom>
+      {({
+        account,
+        chain,
+        openAccountModal,
+        openChainModal,
+        openConnectModal,
+        mounted,
+      }) => {
+        const ready = mounted;
+        const connected = ready && account && chain;
 
-      <AnimatePresence>
-        {showMenu && (
-          <motion.div
-            initial={{ opacity: 0, y: 8, scale: 0.95 }}
-            animate={{ opacity: 1, y: 0, scale: 1 }}
-            exit={{ opacity: 0, y: 8, scale: 0.95 }}
-            transition={{ duration: 0.15 }}
-            className="absolute right-0 top-12 w-64 bg-card border border-border rounded-2xl p-3 shadow-card z-50"
+        return (
+          <div
+            {...(!ready && {
+              'aria-hidden': true,
+              style: {
+                opacity: 0,
+                pointerEvents: 'none',
+                userSelect: 'none',
+              },
+            })}
           >
-            <div className="px-2 py-2 mb-2">
-              <div className="text-xs text-muted mb-1">Connected Wallet</div>
-              <div className="font-mono text-sm text-white">{shortenAddress(account)}</div>
-              <div className={`flex items-center gap-1.5 mt-1 text-xs ${isCorrectNetwork ? 'text-success' : 'text-warning'}`}>
-                <div className={`w-1.5 h-1.5 rounded-full ${isCorrectNetwork ? 'bg-success' : 'bg-warning'} animate-pulse`} />
-                {isCorrectNetwork ? 'Sepolia Testnet' : `Wrong Network (${chainId})`}
-              </div>
-            </div>
-            <div className="border-t border-border my-2" />
-            <button
-              onClick={copyAddress}
-              className="w-full flex items-center gap-2 px-3 py-2 rounded-xl text-sm text-muted hover:text-white hover:bg-surface transition-all"
-            >
-              <Copy className="w-3.5 h-3.5" />
-              Copy Address
-            </button>
-            <a
-              href={`https://sepolia.etherscan.io/address/${account}`}
-              target="_blank"
-              rel="noopener noreferrer"
-              className="w-full flex items-center gap-2 px-3 py-2 rounded-xl text-sm text-muted hover:text-white hover:bg-surface transition-all"
-            >
-              <ExternalLink className="w-3.5 h-3.5" />
-              View on Etherscan
-            </a>
-            {!isCorrectNetwork && (
-              <button
-                onClick={() => { switchToSepolia(); setShowMenu(false); }}
-                className="w-full flex items-center gap-2 px-3 py-2 rounded-xl text-sm text-warning hover:bg-warning/10 transition-all mt-1"
-              >
-                <AlertTriangle className="w-3.5 h-3.5" />
-                Switch to Sepolia
-              </button>
-            )}
-          </motion.div>
-        )}
-      </AnimatePresence>
-      {showMenu && <div className="fixed inset-0 z-40" onClick={() => setShowMenu(false)} />}
-    </div>
+            {(() => {
+              if (!connected) {
+                return (
+                  <button
+                    onClick={openConnectModal}
+                    type="button"
+                    className="flex items-center gap-2 px-4 py-2 rounded-xl bg-accent/15 text-accent border border-accent/30 
+                             text-sm font-display font-semibold transition-all hover:bg-accent/25"
+                  >
+                    <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M3 10h18M7 15h1m4 0h1m-7 4h12a3 3 0 003-3V8a3 3 0 00-3-3H6a3 3 0 00-3 3v8a3 3 0 003 3z" />
+                    </svg>
+                    Connect Wallet
+                  </button>
+                );
+              }
+
+              if (chain.unsupported) {
+                return (
+                  <button
+                    onClick={openChainModal}
+                    type="button"
+                    className="flex items-center gap-2 px-3 py-2 rounded-xl bg-warning/10 text-warning border border-warning/30 
+                             text-sm font-mono font-medium transition-all hover:bg-warning/20"
+                  >
+                    <svg className="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z" />
+                    </svg>
+                    Wrong Network
+                  </button>
+                );
+              }
+
+              return (
+                <div className="flex items-center gap-2">
+                  <button
+                    onClick={openChainModal}
+                    type="button"
+                    className="flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg bg-surface border border-border 
+                             text-xs font-medium text-muted hover:text-white transition-all"
+                  >
+                    {chain.hasIcon && (
+                      <div
+                        style={{
+                          background: chain.iconBackground,
+                          width: 14,
+                          height: 14,
+                          borderRadius: 999,
+                          overflow: 'hidden',
+                        }}
+                      >
+                        {chain.iconUrl && (
+                          <img
+                            alt={chain.name ?? 'Chain icon'}
+                            src={chain.iconUrl}
+                            style={{ width: 14, height: 14 }}
+                          />
+                        )}
+                      </div>
+                    )}
+                    {chain.name}
+                  </button>
+
+                  <button
+                    onClick={openAccountModal}
+                    type="button"
+                    className="flex items-center gap-2 px-3 py-2 rounded-xl bg-success/10 text-success border border-success/30 
+                             text-sm font-mono font-medium transition-all hover:bg-success/20"
+                  >
+                    <svg className="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 13l4 4L19 7" />
+                    </svg>
+                    {account.displayName}
+                  </button>
+                </div>
+              );
+            })()}
+          </div>
+        );
+      }}
+    </ConnectButton.Custom>
   );
 }

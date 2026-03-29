@@ -16,7 +16,7 @@ urlpatterns = [
 
     # Auth
     path('api/auth/register/', views.RegisterView.as_view()),
-    path('api/auth/login/', TokenObtainPairView.as_view()),
+    path('api/auth/login/', views.EmailTokenObtainPairView.as_view()),
     path('api/auth/refresh/', TokenRefreshView.as_view()),
     path('api/auth/me/', views.MeView.as_view()),
     path('api/auth/send-otp/', views.send_otp),

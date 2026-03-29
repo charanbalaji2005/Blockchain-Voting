@@ -4,12 +4,13 @@ import { motion, AnimatePresence } from 'framer-motion';
 import { formatDistanceToNow, format } from 'date-fns';
 import {
   Clock, Users, CheckCircle2, Vote, ExternalLink,
-  ArrowLeft, Zap, Shield, AlertTriangle, Loader2
+  ArrowLeft, Zap, Shield, AlertTriangle, Loader2, BarChart3
 } from 'lucide-react';
 import api from '../utils/api';
 import { useWeb3 } from '../utils/useWeb3';
 import useAuthStore from '../store/authStore';
 import toast from 'react-hot-toast';
+import { getPartyInfo } from '../utils/partyLogos';
 
 export default function ElectionDetailPage() {
   const { id } = useParams();
@@ -23,7 +24,9 @@ export default function ElectionDetailPage() {
   const [voting, setVoting] = useState(false);
   const [voted, setVoted] = useState(false);
   const [txHash, setTxHash] = useState('');
+  const [votedCandidate, setVotedCandidate] = useState(null);
   const [registering, setRegistering] = useState(false);
+  const [publishing, setPublishing] = useState(false);
 
   const fetchElection = () => {
     setLoading(true);
@@ -52,6 +55,20 @@ export default function ElectionDetailPage() {
     }
   };
 
+  const handlePublishToBlockchain = async () => {
+    setPublishing(true);
+    const toastId = toast.loading('Publishing election to blockchain...');
+    try {
+      const response = await api.post(`/elections/${id}/publish_to_blockchain/`);
+      toast.success(`Election published! Blockchain ID: ${response.data.blockchain_election_id}`, { id: toastId, duration: 5000 });
+      fetchElection();
+    } catch (err) {
+      toast.error(err.response?.data?.error || 'Failed to publish to blockchain', { id: toastId });
+    } finally {
+      setPublishing(false);
+    }
+  };
+
   const handleVote = async () => {
     if (!isAuthenticated) { navigate('/login'); return; }
     if (!account) {
@@ -66,17 +83,17 @@ export default function ElectionDetailPage() {
     if (!selected) { toast.error('Select a candidate first'); return; }
 
     const candidate = election.candidates.find(c => c.id === selected);
-    if (!candidate?.blockchain_candidate_id) {
-      toast.error('Candidate not yet on blockchain');
-      return;
-    }
 
     setVoting(true);
     const toastId = toast.loading('Waiting for MetaMask confirmation...');
     try {
+      // Use candidate ID directly (blockchain will handle it)
+      const candidateBlockchainId = candidate.blockchain_candidate_id || candidate.id;
+      const electionBlockchainId = election.blockchain_election_id || 0;
+      
       const { txHash: hash } = await castVoteOnChain(
-        election.blockchain_election_id,
-        candidate.blockchain_candidate_id
+        electionBlockchainId,
+        candidateBlockchainId
       );
       toast.loading('Transaction submitted, waiting for confirmation...', { id: toastId });
 
@@ -88,6 +105,7 @@ export default function ElectionDetailPage() {
       });
 
       setTxHash(hash);
+      setVotedCandidate(candidate);
       setVoted(true);
       toast.success('🗳️ Vote cast successfully!', { id: toastId, duration: 5000 });
       fetchElection();
@@ -118,16 +136,18 @@ export default function ElectionDetailPage() {
   const isLive = election.status === 'active';
   const isUpcoming = election.status === 'upcoming';
   const regStatus = election.user_registration?.status;
-  const canVote = isLive && isAuthenticated && regStatus === 'blockchain_registered' && !voted;
+  const isAdmin = user?.is_staff || user?.is_superuser;
+  // Admin can always vote, regular users need blockchain registration
+  const canVote = isLive && isAuthenticated && (isAdmin || regStatus === 'blockchain_registered') && !voted;
 
   return (
     <div className="min-h-screen bg-void">
       {/* Minimal top nav */}
       <div className="bg-ink/80 backdrop-blur-xl border-b border-border sticky top-0 z-20">
         <div className="max-w-5xl mx-auto px-6 h-16 flex items-center gap-4">
-          <button onClick={() => navigate(-1)} className="p-2 rounded-lg text-muted hover:text-white hover:bg-surface transition-all">
+          <Link to="/elections" className="p-2 rounded-lg text-muted hover:text-white hover:bg-surface transition-all">
             <ArrowLeft className="w-5 h-5" />
-          </button>
+          </Link>
           <div className="font-display font-semibold text-white text-sm line-clamp-1">{election.title}</div>
           <div className="ml-auto flex items-center gap-2">
             {isLive && (
@@ -170,21 +190,76 @@ export default function ElectionDetailPage() {
         </div>
 
         {/* Status / Action banners */}
-        {voted && (
+        {voted && txHash && votedCandidate && (
           <motion.div
             initial={{ opacity: 0, scale: 0.97 }}
             animate={{ opacity: 1, scale: 1 }}
-            className="p-5 rounded-2xl bg-success/10 border border-success/30 flex items-center gap-4"
+            className="p-6 rounded-2xl bg-success/10 border border-success/30"
           >
-            <CheckCircle2 className="w-8 h-8 text-success shrink-0" />
-            <div>
-              <div className="font-display font-semibold text-white mb-1">Vote Recorded on Blockchain!</div>
-              {txHash && (
-                <a href={`https://sepolia.etherscan.io/tx/${txHash}`} target="_blank" rel="noopener noreferrer"
-                  className="text-xs text-success hover:underline font-mono flex items-center gap-1">
-                  {txHash.slice(0, 16)}...{txHash.slice(-8)} <ExternalLink className="w-3 h-3" />
-                </a>
-              )}
+            <div className="flex items-start gap-4">
+              <div className="w-12 h-12 rounded-xl bg-success/20 flex items-center justify-center shrink-0">
+                <CheckCircle2 className="w-6 h-6 text-success" />
+              </div>
+              <div className="flex-1">
+                <div className="font-display font-semibold text-white text-2xl mb-2">
+                  🎉 Thanks for Voting!
+                </div>
+                <p className="text-success text-base font-medium mb-3">
+                  Each vote counts. Your voice matters!
+                </p>
+                <p className="text-muted text-sm mb-4">
+                  Your vote has been permanently recorded on the Sepolia blockchain and cannot be altered.
+                </p>
+                
+                {/* Voted Candidate Showcase */}
+                <div className="bg-surface/50 rounded-xl p-4 mb-4 border border-success/20">
+                  <div className="text-muted text-xs mb-2">You voted for:</div>
+                  <div className="flex items-center gap-3">
+                    <div 
+                      className="w-12 h-12 rounded-lg flex items-center justify-center text-2xl border-2"
+                      style={{ 
+                        backgroundColor: `${getPartyInfo(votedCandidate.party).color}15`,
+                        borderColor: `${getPartyInfo(votedCandidate.party).color}40`
+                      }}
+                    >
+                      {getPartyInfo(votedCandidate.party).symbol}
+                    </div>
+                    <div>
+                      <div className="font-display font-semibold text-white text-lg">
+                        {votedCandidate.name}
+                      </div>
+                      <div 
+                        className="text-xs font-medium px-2 py-0.5 rounded inline-block"
+                        style={{ 
+                          backgroundColor: `${getPartyInfo(votedCandidate.party).color}20`,
+                          color: getPartyInfo(votedCandidate.party).color
+                        }}
+                      >
+                        {votedCandidate.party}
+                      </div>
+                    </div>
+                  </div>
+                </div>
+
+                <div className="space-y-2">
+                  <div className="flex items-center gap-2 text-xs">
+                    <span className="text-muted">Transaction Hash:</span>
+                    <code className="font-mono text-success bg-success/10 px-2 py-1 rounded">
+                      {txHash.slice(0, 10)}...{txHash.slice(-8)}
+                    </code>
+                  </div>
+                  <a
+                    href={`https://sepolia.etherscan.io/tx/${txHash}`}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    className="inline-flex items-center gap-2 px-4 py-2 rounded-lg bg-success/15 text-success 
+                             hover:bg-success/25 transition-all text-sm font-medium"
+                  >
+                    <ExternalLink className="w-4 h-4" />
+                    View on Sepolia Etherscan
+                  </a>
+                </div>
+              </div>
             </div>
           </motion.div>
         )}
@@ -200,7 +275,7 @@ export default function ElectionDetailPage() {
           </div>
         )}
 
-        {isAuthenticated && !regStatus && isLive && !voted && (
+        {isAuthenticated && !regStatus && isLive && !voted && !isAdmin && (
           <div className="p-5 rounded-2xl bg-accent/8 border border-accent/25 flex items-center gap-4">
             <Shield className="w-6 h-6 text-accent shrink-0" />
             <div className="flex-1">
@@ -213,7 +288,7 @@ export default function ElectionDetailPage() {
           </div>
         )}
 
-        {isAuthenticated && regStatus === 'pending' && (
+        {isAuthenticated && regStatus === 'pending' && !isAdmin && (
           <div className="p-5 rounded-2xl bg-warning/8 border border-warning/25 flex items-center gap-4">
             <AlertTriangle className="w-5 h-5 text-warning shrink-0" />
             <div>
@@ -233,34 +308,63 @@ export default function ElectionDetailPage() {
           <div className="grid gap-4 md:grid-cols-2">
             {election.candidates.map((candidate) => {
               const isSelected = selected === candidate.id;
+              const partyData = getPartyInfo(candidate.party);
+              
               return (
                 <motion.div
                   key={candidate.id}
                   whileHover={canVote ? { scale: 1.01 } : {}}
                   whileTap={canVote ? { scale: 0.99 } : {}}
                   onClick={() => canVote && setSelected(candidate.id)}
-                  className={`card rounded-2xl transition-all duration-200
+                  className={`card rounded-2xl transition-all duration-200 overflow-hidden
                     ${canVote ? 'cursor-pointer' : ''}
-                    ${isSelected ? 'border-accent shadow-accent' : canVote ? 'hover:border-accent/40' : ''}`}
+                    ${isSelected ? 'border-accent shadow-accent ring-2 ring-accent/20' : canVote ? 'hover:border-accent/40' : ''}`}
                 >
+                  {/* Party color bar */}
+                  <div 
+                    className="h-1 w-full -mt-6 -mx-6 mb-4"
+                    style={{ 
+                      background: `linear-gradient(to right, ${partyData.color}, transparent)`,
+                      marginTop: '-1.5rem',
+                      marginLeft: '-1.5rem',
+                      marginRight: '-1.5rem',
+                      width: 'calc(100% + 3rem)'
+                    }}
+                  />
+                  
                   <div className="flex items-start gap-4">
-                    {/* Avatar */}
-                    <div className="w-14 h-14 rounded-xl bg-surface border border-border flex items-center justify-center text-xl font-display font-bold text-accent shrink-0">
-                      {candidate.name[0]}
+                    {/* Party Logo/Symbol */}
+                    <div 
+                      className="w-16 h-16 rounded-xl flex items-center justify-center text-3xl shrink-0 border-2"
+                      style={{ 
+                        backgroundColor: `${partyData.color}15`,
+                        borderColor: `${partyData.color}40`
+                      }}
+                    >
+                      {partyData.symbol}
                     </div>
+                    
                     <div className="flex-1 min-w-0">
                       <div className="flex items-start justify-between gap-2">
                         <div>
-                          <h3 className="font-display font-semibold text-white">{candidate.name}</h3>
-                          <div className="text-sm text-muted mt-0.5">{candidate.party}</div>
+                          <h3 className="font-display font-semibold text-white text-lg">{candidate.name}</h3>
+                          <div 
+                            className="text-sm font-medium mt-1 px-2 py-0.5 rounded inline-block"
+                            style={{ 
+                              backgroundColor: `${partyData.color}20`,
+                              color: partyData.color
+                            }}
+                          >
+                            {candidate.party}
+                          </div>
                         </div>
                         {isSelected && (
                           <motion.div
                             initial={{ scale: 0 }}
                             animate={{ scale: 1 }}
-                            className="w-6 h-6 rounded-full bg-accent flex items-center justify-center shrink-0"
+                            className="w-7 h-7 rounded-full bg-accent flex items-center justify-center shrink-0"
                           >
-                            <CheckCircle2 className="w-4 h-4 text-white" />
+                            <CheckCircle2 className="w-5 h-5 text-white" />
                           </motion.div>
                         )}
                       </div>

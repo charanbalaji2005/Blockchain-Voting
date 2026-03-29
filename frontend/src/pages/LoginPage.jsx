@@ -6,14 +6,14 @@ import useAuthStore from '../store/authStore';
 import toast from 'react-hot-toast';
 
 export default function LoginPage() {
-  const [form, setForm] = useState({ username: '', password: '' });
+  const [form, setForm] = useState({ email: '', password: '' });
   const [showPw, setShowPw] = useState(false);
   const { login, isLoading } = useAuthStore();
   const navigate = useNavigate();
 
   const handleSubmit = async (e) => {
     e.preventDefault();
-    const result = await login(form.username, form.password);
+    const result = await login(form.email, form.password);
     if (result.success) {
       toast.success('Welcome back!');
       navigate('/dashboard');
@@ -48,13 +48,13 @@ export default function LoginPage() {
         <div className="card rounded-2xl p-8 border-border/80">
           <form onSubmit={handleSubmit} className="space-y-5">
             <div>
-              <label className="block text-sm font-medium text-white mb-2">Username</label>
+              <label className="block text-sm font-medium text-white mb-2">Email</label>
               <input
-                type="text"
+                type="email"
                 className="input"
-                placeholder="your_username"
-                value={form.username}
-                onChange={e => setForm(p => ({ ...p, username: e.target.value }))}
+                placeholder="your@email.com"
+                value={form.email}
+                onChange={e => setForm(p => ({ ...p, email: e.target.value }))}
                 required
                 autoFocus
               />
